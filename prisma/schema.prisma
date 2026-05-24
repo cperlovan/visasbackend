@@ -1,0 +1,224 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  CONSUL
+  CITIZEN
+  OFFICER 
+  COORDINATOR 
+  LINE_MANAGER 
+  DIRECTOR_GENERAL 
+  EXTERNAL_REVIEWER // Para entes externos (Seguridad, Ministerios, etc.)
+}
+
+enum DocumentType {
+  PASSPORT
+  ID_CARD
+  PHOTO
+  SUPPORTING_DOC
+  SELFIE
+}
+
+enum DocumentStatus {
+  PENDING
+  VALIDATED
+  APPROVED
+  REJECTED
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum ApplicationStatus { // Nuevo enum para el estado de la aplicación de visa
+  DRAFT         // Borrador
+  PENDING_FORM_FILL // Pago verificado, esperando formulario extenso y recaudos
+  VALIDATION    // Validación (Analista)
+  CORRECTION    // Subsanación (Requerimiento al ciudadano)
+  PENDING_COORDINATOR_REVIEW // Enviado al Coordinador para revisión
+  PENDING_LINE_MANAGER_REVIEW // Enviado al Gerente de Línea para revisión
+  PENDING_DIRECTOR_GENERAL_REVIEW // Enviado al Director General para aprobación final
+  APPROVED      // Aprobación final
+  REJECTED      // Rechazo final
+}
+
+enum VisaType {
+  TURISTA
+  CORTESIA
+  NEGOCIOS
+  PRO_v_90
+  TLR_ARTISTA
+  TLR_DEPORTISTA
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum MaritalStatus {
+  SINGLE
+  MARRIED
+  DIVORCED
+  WIDOWED
+}
+
+enum FamilyRole {
+  HOLDER
+  DEPENDENT
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  role      UserRole @default(CITIZEN)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  firstName String? // Añadido para resolver error de 'firstName'
+  lastName  String? // Añadido para consistencia
+  isActive  Boolean  @default(true) // Añadido para resolver error de 'isActive'
+  emailVerified     Boolean  @default(false)
+  verificationToken String?  @unique
+
+  // Relación con el proveedor de identidad
+  provider   AuthProvider @relation(fields: [providerId], references: [id])
+  providerId String
+
+  visaApplications VisaApplication[]
+}
+
+model AuthProvider {
+  id        String   @id @default(uuid())
+  name      String   @unique // Ejemplo: "LDAP_CITIZEN", "LDAP_INTERNAL", "LOCAL"
+  host      String?  // Metadata opcional para la conexión
+  users     User[]
+  createdAt DateTime @default(now())
+}
+
+// --- MODELOS DE CONFIGURACIÓN DINÁMICA ---
+
+model VisaTypeConfig {
+  id              String            @id @default(uuid())
+  visaType        VisaType          @unique
+  name            String
+  arancelAmount   Decimal           @default(0)
+  isActive        Boolean           @default(true)
+  requirements    VisaRequirement[]
+  workflowSteps   WorkflowStep[]    // Define el orden de revisión para este tipo de visa
+  
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+}
+
+model VisaRequirement {
+  id              String         @id @default(uuid())
+  visaConfigId    String
+  visaConfig      VisaTypeConfig @relation(fields: [visaConfigId], references: [id])
+  documentType    DocumentType
+  isRequired      Boolean        @default(true)
+  description     String?        // Instrucciones para el ciudadano
+}
+
+model WorkflowStep {
+  id              String         @id @default(uuid())
+  visaConfigId    String
+  visaConfig      VisaTypeConfig @relation(fields: [visaConfigId], references: [id])
+  stepOrder       Int            // 1, 2, 3...
+  roleRequired    UserRole       // Quién debe revisar en este paso
+  isOptional      Boolean        @default(false)
+  
+  @@unique([visaConfigId, stepOrder])
+}
+
+model VisaApplication {
+  id        String   @id @default(uuid())
+  visaType  VisaType
+  familyRole FamilyRole @default(HOLDER)
+  status    ApplicationStatus @default(DRAFT)
+
+  user      User              @relation(fields: [userId], references: [id])
+  userId    String
+
+  // --- RELACIÓN DE PAGO (MODIFICADA) ---
+  // Se añade la referencia a un único pago.
+  payment   Payment? @relation(fields: [paymentId], references: [id])
+  paymentId String?
+
+  // --- RELACIÓN FAMILIAR (AÑADIDA) ---
+  // Para vincular esta solicitud a una solicitud "padre" o titular.
+  parentApplicationId String?
+  parentApplication   VisaApplication?  @relation("FamilyApplications", fields: [parentApplicationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  dependentApplications VisaApplication[] @relation("FamilyApplications")
+
+  applicationCode String? @unique
+  firstName       String?
+  lastName        String?
+  selfieUrl       String?
+  nationality     String?
+  passportNumber  String?
+  passportType    String?
+  passportIssueDate DateTime?
+  passportExpiryDate DateTime?
+  birthDate       DateTime?
+  birthPlace      String?
+  gender          Gender?
+  maritalStatus   MaritalStatus?
+  profession      String?
+  currentEmployer String?
+  purposeOfTrip   String?
+  arrivalDate     DateTime?
+  stayDuration    Int?
+  officePhone     String?
+  emergencyContact String?
+  economicResponsible String?
+  observations    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  documents       Document[]
+  // La relación 'payments: Payment[]' se ha eliminado.
+}
+
+model Document {
+  id        String         @id @default(uuid())
+  type      DocumentType
+  status    DocumentStatus @default(PENDING)
+  url       String
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  visaApplication   VisaApplication? @relation(fields: [visaApplicationId], references: [id])
+  visaApplicationId String?
+}
+
+model Payment {
+  id            String        @id @default(uuid())
+  amount        Float
+  currency      String        @default("USD")
+  paymentMethod String?
+  status        PaymentStatus @default(PENDING)
+  transactionId String?       @unique
+  gatewayToken  String?       @unique
+  paymentUrl    String?
+  auditData     Json?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  // --- RELACIÓN DE PAGO (MODIFICADA) ---
+  // Un pago ahora puede estar vinculado a una o más solicitudes de visa.
+  visaApplications VisaApplication[]
+
+  // Los campos 'visaApplication' y 'visaApplicationId' se han eliminado.
+}

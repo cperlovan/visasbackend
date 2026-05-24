@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../../dist/libs/shared-dto",
+    "module": "commonjs",
+    "target": "ES2021",
+    "isolatedModules": true // Le dice a TS que trate cada archivo de forma independiente
+  },
+  "include": ["src/**/*.ts", "../app/visas/dto/create-visa.dto.ts", "../app/visas/dto/update-visa-status.dto.ts"]
+}
