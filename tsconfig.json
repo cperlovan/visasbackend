@@ -22,8 +22,6 @@
       "@/*": ["src/*"],
       "@cancilleria-digital/shared-dto": ["src/shared-dto/src/index.ts"]
     },
-    // --- CORRECCIÓN ---
-    "ignoreDeprecations": "5.0"
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
