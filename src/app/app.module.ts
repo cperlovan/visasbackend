@@ -8,6 +8,7 @@ import { UsersModule } from './users/users.module';
 import { ReviewModule } from './review/review.module';
 import { AuthModule } from './auth/auth.module';
 import { AppointmentsModule } from './appointments/appointments.module'; 
+import { VerificationModule } from './verification/verification.module'; // ← NUEVO
 
 
 @Module({
@@ -24,6 +25,7 @@ import { AppointmentsModule } from './appointments/appointments.module';
     ReviewModule,
     AuthModule,
     AppointmentsModule,
+    VerificationModule,
   ],
   controllers: [],
   providers: [],

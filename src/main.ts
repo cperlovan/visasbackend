@@ -1,10 +1,21 @@
-import 'reflect-metadata'; // ¡Esta línea debe ser la primera!
+import 'reflect-metadata';
+
+import { register } from 'tsconfig-paths';
+register({
+  baseUrl: './',
+  paths: {
+    '@/*': ['./src/*'],
+    '@cancilleria-digital/shared-dto': ['./src/shared-dto/src/index.ts'],
+  },
+});
+
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app/app.module';
 import { join } from 'path';
+import { IoAdapter } from '@nestjs/platform-socket.io';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -12,14 +23,18 @@ async function bootstrap() {
   app.setGlobalPrefix(globalPrefix);
 
   // --- HABILITAR CORS ---
-  // Le decimos al backend que confíe en las peticiones del frontend
+  // Se cambia 'origin' a 'true' para permitir cualquier origen durante las pruebas locales.
+  // Esto evita el error "NetworkError" cuando la página test-websocket.html (un archivo local)
+  // intenta hacer una llamada POST al servidor.
   app.enableCors({
-    origin: 'http://localhost:3000', // El origen de tu frontend
+    origin: true, // <-- ESTE ES EL CAMBIO
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });
-  // ----------------------
-  
+
+  // --- HABILITAR WEBSOCKETS (Socket.IO) ---
+  app.useWebSocketAdapter(new IoAdapter(app));
+
   // Configuración de validación global
   app.useGlobalPipes(new ValidationPipe({
     transform: true,
@@ -27,9 +42,7 @@ async function bootstrap() {
     forbidNonWhitelisted: true,
   }));
 
-  // Configurar para servir archivos estáticos (para las selfies, etc.)
-  // AJUSTE: La ruta 'apps/backend/...' era del monorepo. La he corregido a una ruta estándar.
-  // Asegúrate de tener una carpeta 'uploads' en la raíz de 'e_visa_backend'.
+  // Archivos estáticos (selfies, documentos, etc.)
   app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads' });
 
   const config = new DocumentBuilder()
@@ -37,16 +50,17 @@ async function bootstrap() {
     .setDescription('Core API para trámites de visas y gestión consular')
     .setVersion('1.0')
     .addTag('visas')
+    .addTag('verification')
     .addBearerAuth()
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('docs', app, document);
 
-  // AJUSTE: Cambiado el puerto por defecto a 3001 para evitar conflictos con el frontend (que usa 3000).
   const port = process.env.PORT || 3001;
   await app.listen(port);
   Logger.log(`🚀 API running on: http://localhost:${port}/${globalPrefix}`);
   Logger.log(`📖 Swagger docs: http://localhost:${port}/docs`);
+  Logger.log(`🔌 WebSocket en: ws://localhost:${port}/verification`);
 }
 
 bootstrap();

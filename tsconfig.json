@@ -9,7 +9,6 @@
     "target": "ES2021",
     "sourceMap": true,
     "outDir": "./dist",
-    "baseUrl": "./",
     "incremental": true,
     "skipLibCheck": true,
     "strictNullChecks": false,
@@ -19,8 +18,8 @@
     "noFallthroughCasesInSwitch": false,
     "rootDir": "src",
     "paths": {
-      "@/*": ["src/*"],
-      "@cancilleria-digital/shared-dto": ["src/shared-dto/src/index.ts"]
+      "@/*": ["./src/*"],
+      "@cancilleria-digital/shared-dto": ["./src/shared-dto/src/index.ts"]
     },
   },
   "include": ["src/**/*"],

@@ -1,4 +1,5 @@
 import { PrismaClient, VisaType, DocumentType, UserRole } from '@prisma/client';
+import * as bcrypt from 'bcrypt'; // <-- AÑADIDO: Para hashear la contraseña
 
 const prisma = new PrismaClient();
 
@@ -17,7 +18,7 @@ async function main() {
     create: { name: 'LDAP_INTERNAL', host: 'localhost:390' },
   });
 
-  // 2. Configuración para Visa de TURISTA (Requiere Pasaporte y Soporte)
+  // 2. Configuración para Visa de TURISTA
   console.log('Seed: Configurando Visa de TURISTA...');
   await prisma.visaTypeConfig.upsert({
     where: { visaType: VisaType.TURISTA },
@@ -42,7 +43,7 @@ async function main() {
     },
   });
 
-  // 3. Configuración para Visa de CORTESIA (Flujo rápido, solo Pasaporte)
+  // 3. Configuración para Visa de CORTESIA
   console.log('Seed: Configurando Visa de CORTESIA...');
   await prisma.visaTypeConfig.upsert({
     where: { visaType: VisaType.CORTESIA },
@@ -62,6 +63,24 @@ async function main() {
           { stepOrder: 2, roleRequired: UserRole.DIRECTOR_GENERAL },
         ],
       },
+    },
+  });
+
+  // 4. --- NUEVA SECCIÓN: Crear Usuario Administrador ---
+  console.log('Seed: Creando usuario Administrador...');
+  const hashedPassword = await bcrypt.hash('Password123!', 10);
+
+  await prisma.user.upsert({
+    where: { email: 'admin@example.com' },
+    update: {},
+    create: {
+      email: 'admin@example.com',
+      password: hashedPassword,
+      firstName: 'Admin',
+      lastName: 'User',
+      role: UserRole.ADMIN,
+      isActive: true,
+      emailVerified: true, // Lo activamos directamente para pruebas
     },
   });
 
