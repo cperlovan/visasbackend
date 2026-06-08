@@ -1,14 +1,3 @@
-import 'reflect-metadata';
-
-import { register } from 'tsconfig-paths';
-register({
-  baseUrl: './',
-  paths: {
-    '@/*': ['./src/*'],
-    '@cancilleria-digital/shared-dto': ['./src/shared-dto/src/index.ts'],
-  },
-});
-
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
