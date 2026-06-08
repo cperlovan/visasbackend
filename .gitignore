@@ -17,3 +17,10 @@ yarn-error.log*
 
 # local env files
 .env
+
+# Archivos subidos por los usuarios
+/uploads
+
+# Archivos generados
+*.js
+*.js.map
