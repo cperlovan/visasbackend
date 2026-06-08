@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "nest build",
     "start": "node dist/main.js",
     "start:dev": "nodemon",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",
@@ -44,6 +44,7 @@
     "uuid": "^9.0.1"
   },
   "devDependencies": {
+    "@nestjs/cli": "^11.0.22",
     "@swc-node/register": "~1.11.1",
     "@swc/cli": "~0.8.0",
     "@swc/core": "~1.15.5",
