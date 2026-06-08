@@ -3,6 +3,7 @@ import {
   Logger,
   BadRequestException,
   UnauthorizedException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
@@ -15,11 +16,13 @@ import * as path from 'path';
 // ─────────────────────────────────────────────────────────────────────────────
 // Tipos internos
 // ─────────────────────────────────────────────────────────────────────────────
+
+// visaApplicationId es OPCIONAL: permite crear sesión sin solicitud previa
 interface SessionPayload {
   sessionId: string;
-  visaApplicationId: string;
+  visaApplicationId?: string;
   userId: string;
-  type: 'verification_session'; // Para distinguir de otros JWTs del sistema
+  type: 'verification_session';
 }
 
 interface MrzData {
@@ -36,35 +39,48 @@ interface MrzData {
 @Injectable()
 export class VerificationService {
   private readonly logger = new Logger(VerificationService.name);
+  private readonly sessionSecret: string;
 
   constructor(
     private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
     private readonly gateway: VerificationGateway,
-  ) {}
+  ) {
+    // AÑADE TODO ESTE BLOQUE DENTRO DEL CONSTRUCTOR
+    this.sessionSecret = process.env.VERIFICATION_SESSION_SECRET;
+    if (!this.sessionSecret) {
+      this.logger.error(
+        'La variable de entorno VERIFICATION_SESSION_SECRET no está definida.',
+      );
+      throw new InternalServerErrorException(
+        'El servicio de verificación no está configurado correctamente.',
+      );
+    }
+  }
 
   // ───────────────────────────────────────────────────────────────────────────
   // 1. CREAR SESIÓN
-  // El escritorio llama a este método para obtener el token del QR
+  // visaApplicationId es opcional: si se omite, se creará una nueva solicitud
+  // al momento del escaneo.
   // ───────────────────────────────────────────────────────────────────────────
   async createSession(
-    visaApplicationId: string,
+    visaApplicationId: string | undefined,
     userId: string,
   ): Promise<{ sessionId: string; sessionToken: string; qrUrl: string }> {
-    // Verificar que la solicitud de visa existe y pertenece al usuario
-    const application = await this.prisma.visaApplication.findFirst({
-      where: { id: visaApplicationId, userId },
-    });
-
-    if (!application) {
-      throw new BadRequestException(
-        'Solicitud de visa no encontrada o no pertenece al usuario',
-      );
+    // Solo validar la solicitud si se proporcionó un ID
+    if (visaApplicationId) {
+      const application = await this.prisma.visaApplication.findFirst({
+        where: { id: visaApplicationId, userId },
+      });
+      if (!application) {
+        throw new BadRequestException(
+          'Solicitud de visa no encontrada o no pertenece al usuario',
+        );
+      }
     }
 
     const sessionId = uuidv4();
 
-    // Token de corta duración (10 minutos) solo para esta sesión de escaneo
     const sessionToken = this.jwtService.sign(
       {
         sessionId,
@@ -74,16 +90,19 @@ export class VerificationService {
       } as SessionPayload,
       {
         expiresIn: '10m',
-        secret: process.env.VERIFICATION_SESSION_SECRET || process.env.JWT_SECRET,
+        secret: this.sessionSecret, // <-- ¡ESTE ES EL CAMBIO QUE FALTA!
       },
     );
 
-    // URL que irá dentro del QR — apunta a la página móvil de Next.js
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    const qrUrl = `${frontendUrl}/verificar-pasaporte?token=${sessionToken}`;
+
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
+    const baseUrl = frontendUrl.endsWith('/')
+      ? frontendUrl.slice(0, -1)
+      : frontendUrl;
+    const qrUrl = `${baseUrl}/passportVerify?token=${sessionToken}`;
 
     this.logger.log(
-      `📱 Sesión de verificación creada: ${sessionId} para solicitud ${visaApplicationId}`,
+      `📱 Sesión creada: ${sessionId} — solicitud: ${visaApplicationId ?? '(se creará al escanear)'}`,
     );
 
     return { sessionId, sessionToken, qrUrl };
@@ -91,17 +110,19 @@ export class VerificationService {
 
   // ───────────────────────────────────────────────────────────────────────────
   // 2. PROCESAR ESCANEO
-  // El celular llama a este método con la foto del MRZ y la selfie
+  // El celular llama a este método con la foto del MRZ y la selfie.
+  // Si no había visaApplicationId en el token, se CREA una nueva solicitud.
+  // Si ya había uno, se ACTUALIZA la solicitud existente.
   // ───────────────────────────────────────────────────────────────────────────
   async processScan(dto: SubmitScanDto): Promise<{ message: string }> {
     // 2a. Validar y decodificar el token de sesión
     let payload: SessionPayload;
     try {
       payload = this.jwtService.verify<SessionPayload>(dto.sessionToken, {
-        secret:
-          process.env.VERIFICATION_SESSION_SECRET || process.env.JWT_SECRET,
+        secret: this.sessionSecret, // <-- MODIFICA ESTA LÍNEA
       });
-    } catch {
+    } catch (error) { // <-- AÑADE (error)
+      this.logger.error('Fallo en la verificación del token de sesión', error); // <-- AÑADE LOG
       throw new UnauthorizedException(
         'Token de sesión inválido o expirado. Por favor, genera un nuevo QR.',
       );
@@ -111,51 +132,87 @@ export class VerificationService {
       throw new UnauthorizedException('Tipo de token incorrecto');
     }
 
-    const { sessionId, visaApplicationId } = payload;
+    const { sessionId, userId } = payload;
+    // 'let' porque puede ser reasignado si se crea una nueva solicitud
+    let { visaApplicationId } = payload;
 
     try {
       // 2b. Procesar OCR del MRZ
       this.logger.log(`🔍 Procesando OCR para sesión ${sessionId}...`);
       const mrzData = await this.processMrzOcr(dto.mrzImageBase64);
 
-      // 2c. Guardar la selfie en disco (carpeta uploads/selfies/)
+      // 2c. CREAR o ACTUALIZAR la solicitud de visa
+      if (!visaApplicationId) {
+        // ── CREAR: no había solicitud previa ──────────────────────────────
+        this.logger.log(
+          `🌱 Creando nueva solicitud de visa para usuario ${userId}`,
+        );
+        const newApplication = await this.prisma.visaApplication.create({
+          data: {
+            user: { connect: { id: userId } },
+            firstName: mrzData.firstName,
+            lastName: mrzData.lastName,
+            passportNumber: mrzData.passportNumber,
+            birthDate: mrzData.birthDate
+              ? new Date(mrzData.birthDate)
+              : undefined,
+            passportExpiryDate: mrzData.expiryDate
+              ? new Date(mrzData.expiryDate)
+              : undefined,
+            nationality: mrzData.nationality,
+            gender: this.mapGender(mrzData.gender),
+            // Campo obligatorio: valor por defecto hasta que el usuario lo cambie
+            visaType: 'TURISTA',
+          },
+        });
+        visaApplicationId = newApplication.id;
+        this.logger.log(`✅ Nueva solicitud creada: ${visaApplicationId}`);
+      } else {
+        // ── ACTUALIZAR: ya existía la solicitud ───────────────────────────
+        await this.prisma.visaApplication.update({
+          where: { id: visaApplicationId },
+          data: {
+            firstName: mrzData.firstName,
+            lastName: mrzData.lastName,
+            passportNumber: mrzData.passportNumber,
+            birthDate: mrzData.birthDate
+              ? new Date(mrzData.birthDate)
+              : undefined,
+            passportExpiryDate: mrzData.expiryDate
+              ? new Date(mrzData.expiryDate)
+              : undefined,
+            nationality: mrzData.nationality,
+            gender: this.mapGender(mrzData.gender),
+          },
+        });
+        this.logger.log(
+          `✅ Solicitud actualizada con datos del pasaporte: ${visaApplicationId}`,
+        );
+      }
+
+      // 2d. Guardar la selfie en disco (carpeta uploads/selfies/)
       const selfieUrl = await this.saveSelfie(
         dto.selfieImageBase64,
         visaApplicationId,
       );
 
-      // 2d. Comparación facial (selfie vs foto del MRZ)
-      //     Por ahora retorna un score simulado.
-      //     En Fase 3 se conectará a CompreFace on-premise.
+      // 2e. Comparación facial — score simulado hasta Fase 3 (CompreFace)
       const faceMatchScore = await this.compareFaces(
         dto.mrzImageBase64,
         dto.selfieImageBase64,
       );
 
-      // 2e. Actualizar la solicitud de visa en la base de datos
-      //     con los datos extraídos del pasaporte
+      // 2f. Guardar la URL de la selfie en la solicitud
       await this.prisma.visaApplication.update({
         where: { id: visaApplicationId },
-        data: {
-          // Campos que ya existen en tu schema según los DTOs
-          firstName: mrzData.firstName,
-          lastName: mrzData.lastName,
-          passportNumber: mrzData.passportNumber,
-          birthDate: mrzData.birthDate ? new Date(mrzData.birthDate) : undefined,
-          passportExpiryDate: mrzData.expiryDate
-            ? new Date(mrzData.expiryDate)
-            : undefined,
-          nationality: mrzData.nationality,
-          gender: this.mapGender(mrzData.gender),
-          selfieUrl: selfieUrl,
-        },
+        data: { selfieUrl },
       });
 
       this.logger.log(
-        `✅ Datos del pasaporte guardados para solicitud ${visaApplicationId}`,
+        `💾 Selfie vinculada a la solicitud ${visaApplicationId}`,
       );
 
-      // 2f. Notificar al escritorio vía WebSocket que todo está listo
+      // 2g. Notificar al escritorio vía WebSocket
       this.gateway.notifyDesktop(sessionId, {
         status: 'success',
         passportData: {
@@ -169,6 +226,7 @@ export class VerificationService {
         },
         faceMatchScore,
         selfieUrl,
+        visaApplicationId,
       });
 
       return { message: 'Verificación completada con éxito' };
@@ -195,27 +253,22 @@ export class VerificationService {
   /**
    * Procesa el OCR de la zona MRZ del pasaporte.
    *
-   * FASE ACTUAL: Parseo manual de MRZ (sin dependencias externas).
+   * FASE ACTUAL: Retorna datos de ejemplo (STUB).
    * FASE 3: Se conectará al microservicio Tesseract on-premise.
    *
-   * El MRZ de un pasaporte tiene 2 líneas de 44 caracteres cada una:
    * Línea 1: P<VENPEREZ<<JUAN<CARLOS<<<<<<<<<<<<<<<<<<<<
    * Línea 2: AB1234567VEN9005151M3001011<<<<<<<<<<<<<<<6
    */
-  private async processMrzOcr(mrzImageBase64: string): Promise<MrzData> {
-    // ── STUB: En Fase 3 esto será una llamada HTTP al microservicio Tesseract ──
+  private async processMrzOcr(_mrzImageBase64: string): Promise<MrzData> {
+    // ── STUB ─────────────────────────────────────────────────────────────────
+    // En Fase 3 reemplazar por:
     // const response = await axios.post(`${process.env.TESSERACT_URL}/ocr`, {
     //   image: mrzImageBase64,
     //   mode: 'mrz',
     // });
     // return this.parseMrzLines(response.data.text);
     // ─────────────────────────────────────────────────────────────────────────
-
-    // Por ahora retornamos datos de ejemplo para que el flujo funcione
-    // end-to-end durante el desarrollo
-    this.logger.warn(
-      '⚠️  OCR en modo STUB — conectar Tesseract en Fase 3',
-    );
+    this.logger.warn('⚠️  OCR en modo STUB — conectar Tesseract en Fase 3');
 
     return {
       firstName: 'JUAN CARLOS',
@@ -230,11 +283,10 @@ export class VerificationService {
   }
 
   /**
-   * Parsea las 2 líneas del MRZ estándar ICAO 9303 (TD3 - Pasaporte)
-   * Útil cuando Tesseract devuelva el texto crudo.
+   * Parsea las 2 líneas del MRZ estándar ICAO 9303 (TD3 - Pasaporte).
+   * Se usará cuando Tesseract devuelva el texto crudo en Fase 3.
    */
   parseMrzLines(mrzText: string): MrzData {
-    // Limpiar y separar las líneas
     const lines = mrzText
       .replace(/\s+/g, '\n')
       .split('\n')
@@ -250,14 +302,13 @@ export class VerificationService {
     const line1 = lines[0].padEnd(44, '<');
     const line2 = lines[1].padEnd(44, '<');
 
-    // ── Línea 1: Nombres ──────────────────────────────────────────────────
-    // Posición 5-43: apellidos<<nombres
+    // Línea 1: posición 5-43 → apellidos<<nombres
     const nameField = line1.substring(5, 44).replace(/</g, ' ').trim();
     const nameParts = nameField.split('  '); // doble espacio separa apellido de nombre
     const lastName = (nameParts[0] || '').trim();
     const firstName = (nameParts[1] || '').trim();
 
-    // ── Línea 2: Datos del documento ──────────────────────────────────────
+    // Línea 2: datos del documento
     const passportNumber = line2.substring(0, 9).replace(/</g, '');
     const nationality = line2.substring(10, 13).replace(/</g, '');
     const birthDateRaw = line2.substring(13, 19); // AAMMDD
@@ -276,8 +327,8 @@ export class VerificationService {
   }
 
   /**
-   * Convierte fecha MRZ (AAMMDD) a formato ISO (YYYY-MM-DD)
-   * @param isPastDate true para fechas de nacimiento (siglo XX/XXI)
+   * Convierte fecha MRZ (AAMMDD) a formato ISO (YYYY-MM-DD).
+   * @param isPastDate true para fechas de nacimiento (determina el siglo)
    */
   private parseMrzDate(mrzDate: string, isPastDate: boolean): string {
     if (!mrzDate || mrzDate.length !== 6) return '';
@@ -286,7 +337,6 @@ export class VerificationService {
     const mm = mrzDate.substring(2, 4);
     const dd = mrzDate.substring(4, 6);
 
-    // Lógica de siglo: si el año es > año actual + 10, es siglo XX
     const currentYear = new Date().getFullYear() % 100;
     let yyyy: number;
 
@@ -307,7 +357,6 @@ export class VerificationService {
     selfieBase64: string,
     visaApplicationId: string,
   ): Promise<string> {
-    // Extraer el tipo de imagen y los datos binarios del Base64
     const matches = selfieBase64.match(
       /^data:image\/(jpeg|jpg|png|webp);base64,(.+)$/,
     );
@@ -322,21 +371,19 @@ export class VerificationService {
     const imageData = matches[2];
     const buffer = Buffer.from(imageData, 'base64');
 
-    // Crear directorio si no existe
     const uploadDir = path.join(process.cwd(), 'uploads', 'selfies');
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
 
-    // Nombre de archivo único
     const filename = `selfie_${visaApplicationId}_${Date.now()}.${extension}`;
     const filePath = path.join(uploadDir, filename);
 
-    fs.writeFileSync(filePath, buffer);
+    await fs.promises.writeFile(filePath, buffer);
 
     this.logger.log(`💾 Selfie guardada: ${filename}`);
 
-    // Retorna la URL pública relativa (NestJS sirve /uploads como estático)
+    // NestJS sirve /uploads como estático
     return `/uploads/selfies/${filename}`;
   }
 
@@ -350,23 +397,23 @@ export class VerificationService {
     _referenceImageBase64: string,
     _selfieBase64: string,
   ): Promise<number> {
-    // ── STUB: En Fase 3 esto será una llamada a CompreFace ──────────────────
+    // ── STUB ─────────────────────────────────────────────────────────────────
+    // En Fase 3 reemplazar por:
     // const response = await axios.post(
     //   `${process.env.COMPREFACE_URL}/api/v1/verification/verify`,
     //   { source_image: referenceImageBase64, target_image: selfieBase64 },
     //   { headers: { 'x-api-key': process.env.COMPREFACE_API_KEY } },
     // );
     // return response.data.result[0].face_matches[0].similarity;
-    // ────────────────────────────────────────────────────────────────────────
-
+    // ─────────────────────────────────────────────────────────────────────────
     this.logger.warn(
       '⚠️  FaceMatch en modo STUB — conectar CompreFace en Fase 3',
     );
-    return 0.95; // Score simulado: 95% de similitud
+    return 0.95;
   }
 
   /**
-   * Mapea el género del formato MRZ ('M'/'F') al enum de Prisma
+   * Mapea el género del formato MRZ ('M'/'F') al enum de Prisma.
    */
   private mapGender(mrzGender: string): 'MALE' | 'FEMALE' | 'OTHER' {
     if (mrzGender === 'M') return 'MALE';

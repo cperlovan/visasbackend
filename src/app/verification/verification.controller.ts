@@ -21,7 +21,12 @@ import { GetCurrentUser } from '../auth/decorators/get-current-user.decorator';
 @ApiTags('verification')
 @Controller('verification')
 export class VerificationController {
-  constructor(private readonly verificationService: VerificationService) {}
+  // ✅ Se lee FRONTEND_URL del entorno, con fallback a localhost:3001
+  private readonly frontendUrl: string;
+
+  constructor(private readonly verificationService: VerificationService) {
+    this.frontendUrl = (process.env.FRONTEND_URL ?? 'http://localhost:3001').replace(/\/$/, '');
+  }
 
   // ───────────────────────────────────────────────────────────────────────────
   // POST /api/verification/session
@@ -44,7 +49,11 @@ export class VerificationController {
       example: {
         sessionId: 'uuid-de-la-sesion',
         sessionToken: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
-        qrUrl: 'http://localhost:3000/verificar-pasaporte?token=eyJ...',
+        // ✅ El ejemplo del Swagger ahora refleja la URL real del entorno
+        get qrUrl() {
+          const url = (process.env.FRONTEND_URL ?? 'http://localhost:3002').replace(/\/$/, '');
+          return `${url}/passportVerify?token=eyJ...`;
+        },
       },
     },
   })

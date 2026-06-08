@@ -39,7 +39,7 @@ export class PaymentsController {
     // Forzamos una verificación inmediata para que el usuario no tenga que esperar al poll del frontend
     await this.paymentsService.verifyPayment(paymentId);
     
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
     return res.redirect(`${frontendUrl}/tramites/pago-confirmado?paymentId=${paymentId}&orderId=${orderId}`);
   }
 
@@ -51,7 +51,7 @@ export class PaymentsController {
     @Res() res: Response
   ) {
     this.logger.warn(`Usuario regresó de Bancamiga (Cancelado). Orden: ${orderId}`);
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
     return res.redirect(`${frontendUrl}/tramites/pago-fallido?paymentId=${paymentId}`);
   }
 

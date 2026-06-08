@@ -8,7 +8,9 @@ import { UsersModule } from './users/users.module';
 import { ReviewModule } from './review/review.module';
 import { AuthModule } from './auth/auth.module';
 import { AppointmentsModule } from './appointments/appointments.module'; 
-import { VerificationModule } from './verification/verification.module'; // ← NUEVO
+import { VerificationModule } from './verification/verification.module'; 
+
+
 
 
 @Module({

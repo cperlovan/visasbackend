@@ -8,25 +8,39 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { MailService } from './mail.service';
 import { LdapCitizenStrategy } from './strategies/ldap-citizen.strategy';
 import { LdapInternalStrategy } from './strategies/ldap-internal.strategy';
-import { JwtStrategy } from './strategies/jwt.strategy'; // Asumiendo que existe
+import { JwtStrategy } from './strategies/jwt.strategy';
 
 @Module({
   imports: [
     PrismaModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
-    JwtModule.register({
-      secret: process.env.JWT_SECRET || 'secretKey',
-      signOptions: { expiresIn: '1h' },
+    // --- CAMBIO CLAVE: REGISTRO ASÍNCRONO Y SEGURO DEL JWTMODULE ---
+    JwtModule.registerAsync({
+      useFactory: () => {
+        const secret = process.env.JWT_SECRET;
+        if (!secret) {
+          // Esto es crucial: la aplicación no se iniciará si el secreto falta.
+          throw new Error(
+            'FATAL ERROR: La variable de entorno JWT_SECRET no está definida.',
+          );
+        }
+        return {
+          secret: secret,
+          signOptions: { expiresIn: '1h' },
+        };
+      },
     }),
     MailerModule.forRoot({
       transport: {
         host: process.env.MAIL_HOST || 'localhost',
         port: Number(process.env.MAIL_PORT) || 1025,
         ignoreTLS: true,
-        secure: false, // Mailpit no usa SSL/TLS por defecto
+        secure: false,
       },
       defaults: {
-        from: process.env.MAIL_FROM || '"Cancillería Digital" <no-reply@mppre.gob.ve>',
+        from:
+          process.env.MAIL_FROM ||
+          '"Cancillería Digital" <no-reply@mppre.gob.ve>',
       },
     }),
   ],

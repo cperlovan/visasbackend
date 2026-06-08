@@ -77,7 +77,7 @@ export class VerificationGateway
    * (no es un evento de WS directo) para notificar al escritorio
    * cuando el celular ya envió y procesó los datos.
    */
-  notifyDesktop(
+   notifyDesktop(
     sessionId: string,
     payload: {
       status: 'success' | 'failed';
@@ -92,6 +92,7 @@ export class VerificationGateway
       };
       faceMatchScore?: number;
       selfieUrl?: string;
+      visaApplicationId?: string; // ← AGREGAR ESTA LÍNEA
       error?: string;
     },
   ) {
